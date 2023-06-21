@@ -11,6 +11,8 @@ module GPTutor::service {
     use sui::transfer;
     use sui::tx_context::{Self, TxContext};
     use std::vector;
+    use sui::table::{Self, Table};
+    use std::debug;
 
     
     struct ManagerCap has key, store {
@@ -24,13 +26,14 @@ module GPTutor::service {
     struct UserDeposit has key, store {
         id: UID,
         user: address,
-        amount: Balance<SUI>,
+        balance: Balance<SUI>,
         eachTimeLimit: u64,
     }
 
-    struct ActiveUserList has key {
+    struct UserTable has key {
         id: UID,
-        list: vector<UserDeposit>,
+        table: Table<address, UserDeposit>,
+        users: vector<address>,
     }
 
     struct ToWithdrawList has key {
@@ -50,21 +53,33 @@ module GPTutor::service {
         transfer::transfer(ManagerCap {
             id: object::new(ctx)
         }, tx_context::sender(ctx));
+        transfer::share_object(UserTable {
+            id: object::new(ctx),
+            table: table::new(ctx),
+            users: vector::empty(),
+        });
     }
 
     
-    public entry fun new_host(cap: &ManagerCap, host: address, ctx: &mut TxContext) {
+    public entry fun new_host(_cap: &ManagerCap, host: address, ctx: &mut TxContext) {
         transfer::transfer(HostCap {
             id: object::new(ctx)
         }, host);
     }
 
-    public entry fun charge_from_users(cap: &HostCap, deposits: &mut ActiveUserList, charge: vector<u64>){
+
+    fun getAddressFromVector(usedUsers: &vector<address>, i: u64): &address{
+        vector::borrow(usedUsers, i)        
+    }
+
+    public entry fun charge_from_users(cap: &HostCap, userTable: &mut UserTable, usedUsers: vector<address>, usedValue: vector<u64>, ctx: &mut TxContext){
+        assert!(vector::length(&usedUsers) == vector::length(&usedValue), 1);
         let i = 0;
-        let len = vector::length(&deposits.list);
+        let len = vector::length(&usedUsers);
         while (i < len){
-            let item = vector::borrow_mut(&mut deposits.list, i);
-            
+            let userDeposit = table::borrow_mut(&mut userTable.table, getAddressFromVector(usedUsers, i));
+            // // debug::print(&userDeposit);
+            // userDeposit.balance = balance - vector::borrow(usedValue, i);
             i = i+1;
         };
         
@@ -74,7 +89,6 @@ module GPTutor::service {
     #[test]
     fun test_init() {
         use sui::test_scenario;
-        use std::debug;
         // create test addresses representing users
         let admin = @0xad;
         let host = @0xac;
@@ -83,7 +97,6 @@ module GPTutor::service {
         // first transaction to emulate module initialization
         let scenario_val = test_scenario::begin(admin);
         let scenario = &mut scenario_val;
-        debug::print(&admin);
         
         {
             init(test_scenario::ctx(scenario));
@@ -93,7 +106,15 @@ module GPTutor::service {
             let managerCap = test_scenario::take_from_sender<ManagerCap>(scenario);
             new_host(&managerCap, host, test_scenario::ctx(scenario));
             test_scenario::return_to_sender(scenario, managerCap);
-            assert!(false, 1)
+            
+        };
+        test_scenario::next_tx(scenario, host);
+        {
+            let hostCap = test_scenario::take_from_sender<HostCap>(scenario);
+            let userTable = test_scenario::take_shared<UserTable>(scenario);
+            charge_from_users(&hostCap, &mut userTable, test_scenario::ctx(scenario));
+            test_scenario::return_to_sender(scenario, hostCap);
+            test_scenario::return_shared(userTable);
         };
         test_scenario::end(scenario_val);
     }
